@@ -1,0 +1,53 @@
+services:
+  gateway:
+    build: .
+    image: ghcr.io/vitofico/hermes-agent/gateway:dev
+    platform: linux/amd64
+    restart: unless-stopped
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?Set ANTHROPIC_API_KEY in your ignored .env}
+      WEBHOOK_ENABLED: 'true'
+      WEBHOOK_PORT: '8644'
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:?Set WEBHOOK_SECRET in your ignored .env}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS:-}
+    volumes:
+      - gateway-data:/opt/data
+      - type: bind
+        source: ${HERMES_CONFIG:-./examples/config.yaml}
+        target: /opt/data/.hermes/config.yaml
+        read_only: true
+        bind:
+          create_host_path: false
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, /opt/hermes/.venv/bin/python, -c, 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8644/health", timeout=2).read()']
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+  router:
+    build: ./router
+    image: ghcr.io/vitofico/hermes-agent/router:dev
+    platform: linux/amd64
+    restart: unless-stopped
+    environment:
+      WEBHOOK_SHARED_SECRET: ${WEBHOOK_SHARED_SECRET:?Set WEBHOOK_SHARED_SECRET in your ignored .env}
+      HERMES_WEBHOOK_SECRET: ${WEBHOOK_SECRET:?Set WEBHOOK_SECRET in your ignored .env}
+      HERMES_URL: http://gateway:8644/webhooks/uptime-kuma
+    ports:
+      - '127.0.0.1:8080:8080'
+    depends_on:
+      gateway:
+        condition: service_healthy
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, python3, -c, 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8080/health", timeout=2).read()']
+      interval: 10s
+      timeout: 5s
+      retries: 3
+volumes:
+  gateway-data:

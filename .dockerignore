@@ -1,0 +1,14 @@
+.git
+.github
+.gitignore
+.env
+.env.*
+local/
+tests/*
+!tests/check_upstream.py
+docs/
+examples/
+__pycache__/
+.ruff_cache/
+tools/
+compose.yaml

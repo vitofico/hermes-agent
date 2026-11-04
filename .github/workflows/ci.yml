@@ -1,0 +1,102 @@
+name: CI
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Publication heuristics
+        run: python3 tools/audit-publication.py
+      - name: Secret scan snapshot and history
+        working-directory: /tmp
+        run: |
+          curl -fsSLO https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks_8.30.1_linux_x64.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks_8.30.1_linux_x64.tar.gz gitleaks
+          mkdir snapshot
+          git -C "$GITHUB_WORKSPACE" archive HEAD | tar -x -C snapshot
+          ./gitleaks dir snapshot --redact=100 --no-banner --ignore-gitleaks-allow
+          ./gitleaks git "$GITHUB_WORKSPACE" --log-opts=--all --redact=100 --no-banner --ignore-gitleaks-allow
+      - name: Shell lint
+        run: shellcheck entrypoint.sh tests/smoke-image.sh
+      - name: Docker lint
+        run: |
+          docker run --rm -i hadolint/hadolint:v2.12.0 < Dockerfile
+          docker run --rm -i hadolint/hadolint:v2.12.0 < router/Dockerfile
+      - name: Behavioral tests
+        run: make test
+      - name: Render first-run Compose example with synthetic credentials
+        env:
+          ANTHROPIC_API_KEY: synthetic-not-a-key
+          WEBHOOK_SECRET: synthetic-gateway-key
+          WEBHOOK_SHARED_SECRET: synthetic-router-key
+        run: docker compose --env-file /dev/null config --quiet
+  images:
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        image: [gateway, router]
+    steps:
+      - uses: actions/checkout@v6
+      - name: Image coordinates
+        id: image
+        env:
+          REPOSITORY: ${{ github.repository }}
+          COMPONENT: ${{ matrix.image }}
+        run: |
+          name="ghcr.io/${REPOSITORY,,}/${COMPONENT}"
+          context=.
+          if [ "$COMPONENT" = router ]; then context=router; fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "context=$context" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v4
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=sha,mode=short
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+      - name: Build isolated acceptance image
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ steps.image.outputs.context }}
+          push: false
+          load: true
+          tags: companion:smoke
+          provenance: false
+          sbom: false
+      - name: Isolated gateway runtime acceptance
+        if: matrix.image == 'gateway'
+        run: tests/smoke-image.sh companion:smoke
+      - name: Publish verified image
+        uses: docker/build-push-action@v7
+        if: github.event_name != 'pull_request'
+        with:
+          context: ${{ steps.image.outputs.context }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
