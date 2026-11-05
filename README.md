@@ -4,7 +4,7 @@ A small container integration for [Nous Research Hermes Agent](https://github.co
 
 ## First run from source
 
-Docker Engine with the Compose plugin and make are required for this flow. During private preparation, cloning requires access to the private GitHub repository; an existing authorized checkout works too. The companion `:dev` images are built locally and need no registry login. After public release, verify anonymous source access as described in the release checklist. The gateway's pinned base and both published image builds currently target **linux/amd64**; ARM hosts need working amd64 emulation. Other router architectures have not been verified.
+Docker Engine with the Compose plugin and make are required for this flow. This source repository and the gateway/router image packages are public; anonymous cloning and image pulls require no GitHub or GHCR credentials. The companion `:dev` images in this flow are built locally. The gateway's pinned base and both published image builds currently target **linux/amd64**; ARM hosts need working amd64 emulation. Other router architectures have not been verified.
 
 ```sh
 git clone https://github.com/vitofico/hermes-agent.git
@@ -26,16 +26,28 @@ The example explicitly selects Anthropic and `claude-sonnet-4-5`. Choose a model
 
 ## Images and Kubernetes
 
-| Component | New package | Verified build platform |
+| Component | Public package | Verified build platform |
 |---|---|---|
 | Gateway | `ghcr.io/vitofico/hermes-agent/gateway` | `linux/amd64` |
 | Alert router | `ghcr.io/vitofico/hermes-agent/router` | `linux/amd64` |
 
-CI publishes `sha-<short>` images from `main` or an explicit manual dispatch, and version tags from `v*` releases. Once reviewed releases are available, pin deployments by registry digest and override the local Compose `:dev` image choices as appropriate. Source and packages start private; anonymous clone/pull checks are publication gates, not assumptions made by this quickstart.
+CI publishes `sha-<short>` images from `main` or an explicit manual dispatch, and version tags from `v*` releases. For example, pull the reviewed source build without registry credentials:
+
+```sh
+docker pull --platform linux/amd64 ghcr.io/vitofico/hermes-agent/gateway:sha-a475ec4
+docker pull --platform linux/amd64 ghcr.io/vitofico/hermes-agent/router:sha-a475ec4
+# Record the immutable registry references returned for this build.
+docker image inspect ghcr.io/vitofico/hermes-agent/gateway:sha-a475ec4 \
+  --format '{{index .RepoDigests 0}}'
+docker image inspect ghcr.io/vitofico/hermes-agent/router:sha-a475ec4 \
+  --format '{{index .RepoDigests 0}}'
+```
+
+Use the resulting `ghcr.io/…@sha256:…` references in deployments; registry digests are immutable while tags can be moved. The Compose quickstart above deliberately builds local `:dev` images. To run published images through Compose, supply a local override selecting the two digest references and use `docker compose -f compose.yaml -f local/published.compose.yaml up -d --no-build`. Configure credentials and persistent storage exactly as for the source build.
 
 The gateway uses the pinned Hermes v0.21.5 base in `Dockerfile`. Its source-guarded Anthropic authentication and empty-webhook-toolset compatibility patches, plus the independently pinned real Tini, are documented in [design.md](docs/design.md).
 
-For Kubernetes, use [Kubernetes Homelab Kit](https://github.com/vitofico/kubernetes-homelab-kit) and its optional Hermes modules. Image release/digest selection is explicit; verify the kit revision you use supports the selected companion image contract. Deployment-specific skills, RBAC, networking, model selection, and repair authority belong to the consuming repository. Older flat image packages remain legacy migration inputs; new builds publish only the nested packages above.
+For Kubernetes, use [Kubernetes Homelab Kit](https://github.com/vitofico/kubernetes-homelab-kit) and its optional Hermes modules. Image release/digest selection is explicit; verify the kit revision you use supports the selected companion image contract. Deployment-specific skills, RBAC, networking, model selection, and repair authority belong to the consuming repository. Archived operational source and older flat image packages remain private rollback assets. Public installation uses the nested packages above; new builds publish only those packages.
 
 ## Gateway configuration
 
